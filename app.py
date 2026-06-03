@@ -10,38 +10,54 @@ import serpapi
 
 # --- CORE FUNCTIONS ---
 
-def search_brand_mentions(brand_name, brand_domain, api_key, num_results):
-    """Searches the web for brand mentions, excluding the brand's own domain."""
+def search_brand_mentions(brand_name, brand_domain, api_key, max_results):
+    """Searches the web for brand mentions using pagination to get past the 10-result limit."""
     client = serpapi.Client(api_key=api_key)
     results_list = []
     
-    # Construct the search query
-    # If the user provides a domain, append '-site:domain.com' to exclude it
+    # Construct the search query to exclude their own domain
     search_query = brand_name
     if brand_domain:
-        # Clean up the domain just in case the user pasted a full URL
         clean_domain = brand_domain.replace("https://", "").replace("http://", "").replace("www.", "").strip("/ ")
         search_query = f"{brand_name} -site:{clean_domain}"
     
-    try:
-        search_results = client.search({
-            "engine": "google",
-            "q": search_query,
-            "num": num_results, # Google supports up to 100 results per page
-            "hl": "en",
-            "gl": "us"
-        })
-        
-        if "organic_results" in search_results:
-            for r in search_results["organic_results"]:
-                results_list.append({
-                    "Title": r.get("title", ""),
-                    "URL": r.get("link", ""),
-                    "Snippet": r.get("snippet", "")
-                })
-    except Exception as e:
-        st.error(f"SerpApi Search failed. Please check if your API key is valid. Error: {e}")
-        
+    # We will use the 'start' parameter to offset the results (0, 10, 20, etc.)
+    start_index = 0
+    
+    # Keep looping until we collect the exact amount the user asked for
+    while len(results_list) < max_results:
+        try:
+            search_results = client.search({
+                "engine": "google",
+                "q": search_query,
+                "start": start_index,  # Google uses 'start' to move to the next page
+                "hl": "en",
+                "gl": "us"
+            })
+            
+            # Extract the links from the current page
+            if "organic_results" in search_results:
+                for r in search_results["organic_results"]:
+                    results_list.append({
+                        "Title": r.get("title", ""),
+                        "URL": r.get("link", ""),
+                        "Snippet": r.get("snippet", "")
+                    })
+                    # Stop instantly if we hit the requested limit mid-page
+                    if len(results_list) >= max_results:
+                        break 
+            
+            # Break the loop early if Google runs out of pages to show
+            if "serpapi_pagination" not in search_results or "next" not in search_results["serpapi_pagination"]:
+                break
+                
+            # Increase the start index by 10 to flip to the next page for the next loop iteration
+            start_index += 10 
+            
+        except Exception as e:
+            st.error(f"Search failed while fetching page offset {start_index}. Error: {e}")
+            break
+            
     return results_list
 
 def generate_excel(dataframe):
@@ -53,15 +69,20 @@ def generate_excel(dataframe):
 
 def send_email_with_attachment(recipient_email, brand_name, excel_data):
     """Sends the generated Excel file via SMTP."""
-    sender_email = st.secrets.get("EMAIL_SENDER", "your_email@gmail.com")
-    sender_password = st.secrets.get("EMAIL_PASSWORD", "your_app_password")
+    # Ensure you have your sender credentials configured in .streamlit/secrets.toml
+    sender_email = st.secrets.get("EMAIL_SENDER")
+    sender_password = st.secrets.get("EMAIL_PASSWORD")
     
+    if not sender_email or not sender_password:
+        st.error("App email credentials are not configured in secrets.")
+        return False
+        
     msg = MIMEMultipart()
     msg['From'] = sender_email
     msg['To'] = recipient_email
     msg['Subject'] = f"Your Brand Mention Report: {brand_name}"
     
-    body = f"Hello,\n\nPlease find the recent web mentions for {brand_name} attached.\n\nBest,\nYour App"
+    body = f"Hello,\n\nPlease find the recent web mentions for {brand_name} attached.\n\nBest,\nYour Brand Monitor App"
     msg.attach(MIMEText(body, 'plain'))
     
     attachment = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
@@ -88,7 +109,6 @@ st.title("🔍 Brand Monitor")
 st.write("Scan the web for brand mentions, filter out the company's own site, and generate a report.")
 
 with st.form("brand_form"):
-    # Grouping inputs cleanly
     col1, col2 = st.columns(2)
     with col1:
         brand = st.text_input("Brand / Company Name: *", placeholder="e.g., Apple")
@@ -97,7 +117,6 @@ with st.form("brand_form"):
         
     email = st.text_input("Delivery Email Address: *", placeholder="name@example.com")
     
-    # Let the user choose how many results they want (Max 100 for a single Google page)
     result_volume = st.slider("Number of Mentions to Fetch:", min_value=10, max_value=100, value=50, step=10)
     
     user_api_key = st.text_input("Your SerpApi Key: *", type="password", help="Get your free key at serpapi.com")
@@ -111,8 +130,8 @@ if submit_button:
     else:
         with st.status(f"Tracking mentions for **{brand}**...", expanded=True) as status:
             
-            st.write(f"🔎 Fetching up to {result_volume} results...")
-            raw_mentions = search_brand_mentions(brand, domain, user_api_key, num_results=result_volume)
+            st.write(f"🔎 Fetching up to {result_volume} results using pagination...")
+            raw_mentions = search_brand_mentions(brand, domain, user_api_key, max_results=result_volume)
             
             if not raw_mentions:
                 status.update(label="No mentions found or invalid API key.", state="error")
@@ -129,7 +148,7 @@ if submit_button:
             if email_sent:
                 status.update(label=f"Successfully generated and emailed {len(df)} mentions!", state="complete", expanded=False)
             else:
-                status.update(label="Generated report, but email failed to send.", state="error")
+                status.update(label=f"Generated report of {len(df)} mentions, but email failed to send.", state="error")
         
         st.subheader(f"Data Preview ({len(df)} Results)")
         st.dataframe(df, use_container_width=True)
