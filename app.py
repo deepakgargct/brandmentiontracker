@@ -10,16 +10,24 @@ import serpapi
 
 # --- CORE FUNCTIONS ---
 
-def search_brand_mentions(brand_name, api_key, num_results=10):
-    """Searches the web for recent brand mentions using the user's SerpApi key."""
+def search_brand_mentions(brand_name, brand_domain, api_key, num_results):
+    """Searches the web for brand mentions, excluding the brand's own domain."""
     client = serpapi.Client(api_key=api_key)
     results_list = []
+    
+    # Construct the search query
+    # If the user provides a domain, append '-site:domain.com' to exclude it
+    search_query = brand_name
+    if brand_domain:
+        # Clean up the domain just in case the user pasted a full URL
+        clean_domain = brand_domain.replace("https://", "").replace("http://", "").replace("www.", "").strip("/ ")
+        search_query = f"{brand_name} -site:{clean_domain}"
     
     try:
         search_results = client.search({
             "engine": "google",
-            "q": brand_name,
-            "num": num_results,
+            "q": search_query,
+            "num": num_results, # Google supports up to 100 results per page
             "hl": "en",
             "gl": "us"
         })
@@ -45,7 +53,6 @@ def generate_excel(dataframe):
 
 def send_email_with_attachment(recipient_email, brand_name, excel_data):
     """Sends the generated Excel file via SMTP."""
-    # The app still needs its own email credentials to send the message out
     sender_email = st.secrets.get("EMAIL_SENDER", "your_email@gmail.com")
     sender_password = st.secrets.get("EMAIL_PASSWORD", "your_app_password")
     
@@ -78,27 +85,34 @@ def send_email_with_attachment(recipient_email, brand_name, excel_data):
 
 st.set_page_config(page_title="Brand Monitor", page_icon="🔍")
 st.title("🔍 Brand Monitor")
-st.write("Enter a brand name and your SerpApi key to scan the web for mentions and generate an Excel report.")
+st.write("Scan the web for brand mentions, filter out the company's own site, and generate a report.")
 
 with st.form("brand_form"):
-    brand = st.text_input("Brand / Company Name:", placeholder="e.g., Apple, Tesla")
-    email = st.text_input("Delivery Email Address:", placeholder="name@example.com")
+    # Grouping inputs cleanly
+    col1, col2 = st.columns(2)
+    with col1:
+        brand = st.text_input("Brand / Company Name: *", placeholder="e.g., Apple")
+    with col2:
+        domain = st.text_input("Company Domain to Exclude:", placeholder="e.g., apple.com")
+        
+    email = st.text_input("Delivery Email Address: *", placeholder="name@example.com")
     
-    # New input for the user's API key
-    user_api_key = st.text_input("Your SerpApi Key:", type="password", help="Get your free key at serpapi.com")
+    # Let the user choose how many results they want (Max 100 for a single Google page)
+    result_volume = st.slider("Number of Mentions to Fetch:", min_value=10, max_value=100, value=50, step=10)
     
+    user_api_key = st.text_input("Your SerpApi Key: *", type="password", help="Get your free key at serpapi.com")
+    
+    st.caption("Fields marked with * are required.")
     submit_button = st.form_submit_button("Generate Report")
 
 if submit_button:
-    # Updated validation to require all three fields
     if not brand or not email or not user_api_key:
-        st.warning("Please fill out the brand name, email address, and your SerpApi key.")
+        st.warning("Please fill out the Brand Name, Email Address, and your SerpApi key.")
     else:
         with st.status(f"Tracking mentions for **{brand}**...", expanded=True) as status:
             
-            st.write("🔎 Searching the web...")
-            # Pass the user's API key into the search function
-            raw_mentions = search_brand_mentions(brand, user_api_key, num_results=15)
+            st.write(f"🔎 Fetching up to {result_volume} results...")
+            raw_mentions = search_brand_mentions(brand, domain, user_api_key, num_results=result_volume)
             
             if not raw_mentions:
                 status.update(label="No mentions found or invalid API key.", state="error")
@@ -113,11 +127,11 @@ if submit_button:
             email_sent = send_email_with_attachment(email, brand, excel_file)
             
             if email_sent:
-                status.update(label="Report successfully generated and emailed!", state="complete", expanded=False)
+                status.update(label=f"Successfully generated and emailed {len(df)} mentions!", state="complete", expanded=False)
             else:
                 status.update(label="Generated report, but email failed to send.", state="error")
         
-        st.subheader("Data Preview")
+        st.subheader(f"Data Preview ({len(df)} Results)")
         st.dataframe(df, use_container_width=True)
         
         st.download_button(
