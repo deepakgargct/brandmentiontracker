@@ -10,28 +10,20 @@ import serpapi
 
 # --- CORE FUNCTIONS ---
 
-def search_brand_mentions(brand_name, num_results=10):
-    """Searches the web for recent brand mentions using SerpApi."""
-    # Ensure your API key is stored in .streamlit/secrets.toml
-    api_key = st.secrets.get("SERPAPI_KEY")
-    if not api_key:
-        st.error("SerpApi API key not found in secrets.")
-        return []
-
+def search_brand_mentions(brand_name, api_key, num_results=10):
+    """Searches the web for recent brand mentions using the user's SerpApi key."""
     client = serpapi.Client(api_key=api_key)
     results_list = []
     
     try:
-        # We query the standard Google engine for overall web results
         search_results = client.search({
             "engine": "google",
             "q": brand_name,
-            "num": num_results, # Number of results to fetch
+            "num": num_results,
             "hl": "en",
             "gl": "us"
         })
         
-        # Extract the 'organic_results' which represent standard web pages
         if "organic_results" in search_results:
             for r in search_results["organic_results"]:
                 results_list.append({
@@ -40,7 +32,7 @@ def search_brand_mentions(brand_name, num_results=10):
                     "Snippet": r.get("snippet", "")
                 })
     except Exception as e:
-        st.error(f"SerpApi Search failed: {e}")
+        st.error(f"SerpApi Search failed. Please check if your API key is valid. Error: {e}")
         
     return results_list
 
@@ -53,6 +45,7 @@ def generate_excel(dataframe):
 
 def send_email_with_attachment(recipient_email, brand_name, excel_data):
     """Sends the generated Excel file via SMTP."""
+    # The app still needs its own email credentials to send the message out
     sender_email = st.secrets.get("EMAIL_SENDER", "your_email@gmail.com")
     sender_password = st.secrets.get("EMAIL_PASSWORD", "your_app_password")
     
@@ -85,25 +78,30 @@ def send_email_with_attachment(recipient_email, brand_name, excel_data):
 
 st.set_page_config(page_title="Brand Monitor", page_icon="🔍")
 st.title("🔍 Brand Monitor")
-st.write("Enter a brand name to scan the web for mentions and generate an Excel report.")
+st.write("Enter a brand name and your SerpApi key to scan the web for mentions and generate an Excel report.")
 
 with st.form("brand_form"):
     brand = st.text_input("Brand / Company Name:", placeholder="e.g., Apple, Tesla")
     email = st.text_input("Delivery Email Address:", placeholder="name@example.com")
     
+    # New input for the user's API key
+    user_api_key = st.text_input("Your SerpApi Key:", type="password", help="Get your free key at serpapi.com")
+    
     submit_button = st.form_submit_button("Generate Report")
 
 if submit_button:
-    if not brand or not email:
-        st.warning("Please fill out both the brand name and email address.")
+    # Updated validation to require all three fields
+    if not brand or not email or not user_api_key:
+        st.warning("Please fill out the brand name, email address, and your SerpApi key.")
     else:
         with st.status(f"Tracking mentions for **{brand}**...", expanded=True) as status:
             
-            st.write("🔎 Searching the web via SerpApi...")
-            raw_mentions = search_brand_mentions(brand, num_results=15)
+            st.write("🔎 Searching the web...")
+            # Pass the user's API key into the search function
+            raw_mentions = search_brand_mentions(brand, user_api_key, num_results=15)
             
             if not raw_mentions:
-                status.update(label="No mentions found.", state="error")
+                status.update(label="No mentions found or invalid API key.", state="error")
                 st.stop()
                 
             df = pd.DataFrame(raw_mentions)
